@@ -1357,13 +1357,29 @@ func (x *GoSNMP) unmarshalVBL(packet []byte, response *SnmpPacket) error {
 func (x *GoSNMP) receive() ([]byte, error) {
 	var n int
 	var err error
-	// If we are using UDP and unconnected socket, read the packet and
-	// disregard the source address.
-	if uconn, ok := x.Conn.(net.PacketConn); ok {
-		n, _, err = uconn.ReadFrom(x.rxBuf[:])
-	} else {
-		n, err = x.Conn.Read(x.rxBuf[:])
+
+	var ctxC <-chan struct{}
+	if x.Context != nil {
+		ctxC = x.Context.Done()
 	}
+	c := make(chan struct{})
+	go func() {
+		defer close(c)
+		// If we are using UDP and unconnected socket, read the packet and
+		// disregard the source address.
+		if uconn, ok := x.Conn.(net.PacketConn); ok {
+			n, _, err = uconn.ReadFrom(x.rxBuf[:])
+		} else {
+			n, err = x.Conn.Read(x.rxBuf[:])
+		}
+	}()
+
+	select {
+	case <-ctxC:
+		return nil, fmt.Errorf("context finished when receiving data: %w", x.Context.Err())
+	case <-c:
+	}
+
 	if err == io.EOF {
 		return nil, err
 	} else if err != nil {
